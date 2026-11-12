@@ -17,7 +17,7 @@ authors = [
 ]
 description = "WISE"
 readme = "README.txt"
-requires-python = ">=3.6"
+requires-python = ">=3.9"
 classifiers = [
   "Programming Language :: Python :: 3",
 ]
@@ -27,7 +27,8 @@ dependencies = [
   "xarray",
   "netcdf4",
   "geopandas",
-  "rasterio"
+  "rasterio",
+  "tzdata"
 ]
 
 [project.urls]
