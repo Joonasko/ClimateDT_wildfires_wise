@@ -20,10 +20,22 @@ from rasterio.transform import xy
 
 WISE_TIMEOUT = 10800  # Per-area limit in seconds: 1 hour.
 
+AREA_COORDS = (
+    (64.007044, 24.152986),
+    (63.050609, 29.889436),
+    (63.436092, 30.541259),
+    (40.041393, -8.114061),
+    (40.041393, -8.114061),
+    (40.196173, -8.137504),
+    (40.196173, -8.137504),
+    (40.125040, -8.113300),
+    (40.125040, -8.113300),
+)
 
-def run_timezone(simulation_date, area_index):
+
+def run_timezone(simulation_date, area_index, ignition_hour=10):
     zone_name = "Europe/Helsinki" if area_index < 3 else "Europe/Lisbon"
-    ignition = (pd.Timestamp(simulation_date).normalize() + pd.Timedelta(hours=10))
+    ignition = (pd.Timestamp(simulation_date).normalize() + pd.Timedelta(hours=ignition_hour))
     try:
         zone = ZoneInfo(zone_name)
     except ZoneInfoNotFoundError as error:
@@ -258,7 +270,9 @@ def modify_fgmj(
         data_in, job_name, scen_name, ign_lon, ign_lat, weather_path, spat_path,
         starting_codes, area_index,
     ):
-        code, zone_id, fixed_zone, _ = run_timezone(ignition_start[:10], area_index)
+        code, zone_id, fixed_zone, _ = run_timezone(
+            ignition_start[:10], area_index, pd.Timestamp(ignition_start).hour
+        )
         set_job_timezone(data_in, code, zone_id)
         data_in["project"]["timeZoneSettings"] = {
             "version": 1, "timezoneIndex": zone_id,
@@ -445,7 +459,8 @@ def modify_fgmj(
 
 
 def ncdf_edits_multiarea(
-    dataset_path, fwi_file=None, simulation_date=None, fwi_diagnostics=None
+    dataset_path, fwi_file=None, simulation_date=None, fwi_diagnostics=None,
+    scenario_start_hour=10, scenario_end_hour=21,
 ):
     print("running ncdf_edits_multiarea.py")
     # load netcdf dataset
@@ -471,45 +486,17 @@ def ncdf_edits_multiarea(
     dataset["relative_humidity"] = relative_humidity
     dataset["temperature"] = temperature_celsius
 
-    # set the ignition coordinates for the nine test areas
-    area1_lat = 64.007044
-    area1_lon = 24.152986
-
-    area2_lat = 63.050609
-    area2_lon = 29.889436
-
-    area3_lat = 63.436092
-    area3_lon = 30.541259
-
-    area4_lat = 40.041393
-    area4_lon = -8.114061
-
-    area5_lat = 40.041393
-    area5_lon = -8.114061
-
-    area6_lat = 40.196173
-    area6_lon = -8.137504
-
-    area7_lat = 40.196173
-    area7_lon = -8.137504
-
-    area8_lat = 40.125040
-    area8_lon = -8.113300
-
-    area9_lat = 40.125040
-    area9_lon = -8.113300
-
-
-    # select only closest cell from netcdf to each ignition location
-    area_coords = [
+    area_coords = AREA_COORDS
+    (
         (area1_lat, area1_lon), (area2_lat, area2_lon), (area3_lat, area3_lon),
         (area4_lat, area4_lon), (area5_lat, area5_lon), (area6_lat, area6_lon),
-        (area7_lat, area7_lon), (area8_lat, area8_lon), (area9_lat, area9_lon)
-    ]
+        (area7_lat, area7_lon), (area8_lat, area8_lon), (area9_lat, area9_lon),
+    ) = area_coords
     
     dataframes = []
     for lat, lon in area_coords:
-        nearest_cell = dataset.sel(lat=lat, lon=lon, method="nearest")
+        lon_index = int(np.argmin(np.abs((dataset.lon.values - lon + 180) % 360 - 180)))
+        nearest_cell = dataset.sel(lat=lat, method="nearest").isel(lon=lon_index)
         dataframes.append(nearest_cell.to_dataframe())
 
 
@@ -525,20 +512,22 @@ def ncdf_edits_multiarea(
         simulation_date if simulation_date is not None else utc_times[0].tz_localize(None)
     ).normalize()
     end_date = utc_times[-1].tz_localize(None).normalize()
-    ignition_start = run_date + pd.Timedelta(hours=10)
-    scenario_end = end_date + pd.Timedelta(hours=21)
+    if not (0 <= scenario_start_hour <= 23 and 0 <= scenario_end_hour <= 23):
+        raise ValueError("Scenario hours must be between 0 and 23")
+    ignition_start = run_date + pd.Timedelta(hours=scenario_start_hour)
+    scenario_end = end_date + pd.Timedelta(hours=scenario_end_hour)
     if scenario_end <= ignition_start:
-        raise ValueError("Scenario end must be after ignition at 10:00 local")
+        raise ValueError("Scenario end must be after ignition")
 
     variables_to_drop = ["10v", "10u", "2t", "2d"]
     weather_starts = []
     for i, df in enumerate(dataframes):
-        code, zone_id, fixed_zone, zone_name = run_timezone(run_date, i)
+        code, zone_id, fixed_zone, zone_name = run_timezone(run_date, i, scenario_start_hour)
         local_times = utc_times.tz_convert(fixed_zone)
         start = ignition_start.tz_localize(fixed_zone)
         end = scenario_end.tz_localize(fixed_zone)
         if start < local_times[0] or end > local_times[-1]:
-            raise ValueError(f"area{i + 1}: weather does not cover the 10:00-21:00 local scenario")
+            raise ValueError(f"area{i + 1}: weather does not cover the local scenario")
         scenario_times = pd.date_range(start, end, freq="h").tz_convert(ZoneInfo(zone_name))
         if any(time.utcoffset() != start.utcoffset() for time in scenario_times):
             raise ValueError(
@@ -549,7 +538,7 @@ def ncdf_edits_multiarea(
         if any(time.utcoffset() != start.utcoffset() for time in civil_times):
             print(
                 f"WARNING: area{i + 1}: weather spans an offset change in {zone_name}; "
-                f"all rows use the fixed {code} offset selected at 10:00 local ignition. "
+                f"all rows use the fixed {code} offset selected at local ignition. "
                 "UTC instants are preserved; pre/post-transition clock labels may differ "
                 "from civil time outside the scenario."
             )
@@ -651,7 +640,7 @@ def ncdf_edits_multiarea(
 
 def run_wise(
     in_path, out_path, year_start, month_start, day_start, year_end, month_end, day_end,
-    fwi_file=None, fwi_dir=None,
+    fwi_file=None, fwi_dir=None, scenario_start_hour=10, scenario_end_hour=21,
 ):
     print("running run_wise.py")
     simulation_date = np.datetime64(
@@ -722,6 +711,7 @@ def run_wise(
     scen_name_1, scen_name_2, scen_name_3, scen_name_4, scen_name_5, scen_name_6, scen_name_7, scen_name_8, scen_name_9 = ncdf_edits_multiarea(
         file_name, fwi_file=fwi_file, simulation_date=simulation_date,
         fwi_diagnostics=fwi_diagnostics,
+        scenario_start_hour=scenario_start_hour, scenario_end_hour=scenario_end_hour,
     )
 
     # run the WISE model for all test areas

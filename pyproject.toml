@@ -28,6 +28,7 @@ dependencies = [
   "netcdf4",
   "geopandas",
   "rasterio",
+  "dask",
   "tzdata"
 ]
 
@@ -36,3 +37,4 @@ Homepage = "https://github.com/Joonasko/WISE"
 
 [project.scripts]
 run_wise = "wise.run_wise:main"
+run_wildfires_fwi = "fwi.run_wildfires_fwi:main"

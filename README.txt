@@ -9,6 +9,35 @@ The run_wildfires_wise.py will take the start and end dates as input and select 
 Data request file:
 Data request file is the request.yml file
 
+Combined daily FWI and WISE runner:
+Run the installed package in the WISE container, for example:
+
+python -m wise.run_wildfires --year 2022 --month 6 --day 6 \
+  --input-dir /input_data --output-dir /fwi_output
+
+The input directory must contain the hourly weather required by both apps,
+including adjacent-day hours needed by FWI. The FWI output directory must
+persist across days; the WISE output directory must be mounted at
+/wise_output. Use --extra-input-dir for additional FWI weather directories.
+FWI writes prepared _LNOON_inputs.nc files in the input directory, and WISE
+writes combined_ncdf.nc there, so the input directory must be writable.
+Historical FWI output is stored in --output-dir; projection output is stored
+in its projections/<experiment> subdirectory, with historical handover data
+under historical_boundary/<experiment>.
+The runner calculates daily regular FWI, then checks the nearest grid cells
+for all nine WISE ignition areas. If any FWI is at least 21.3, it runs all
+WISE scenarios for 08:00-20:00 local time, using the previous calendar day's
+component file for starting codes. Missing previous components retain WISE's
+warning and template fallback; invalid components may skip individual areas.
+WISE records individual scenario failures in its status JSON; launching all
+scenarios does not guarantee that all of them complete successfully.
+The runner fails when the requested daily FWI file or a valid threshold value
+is missing. In a fresh FWI integration the first date is normally skipped,
+so initialize using sufficient prior weather or provide an appropriate restart.
+FWI initialization uses zero moisture codes and requires spin-up. A daily
+invocation is required: --monthly-chunk, --prepare-only and
+--no-write-components are not supported by the combined runner.
+
 NetCDF georeferencing:
 The TIFF outputs are reprojected to a regular WGS84 (EPSG:4326) grid.
 Latitude and longitude describe pixel centres and include CF coordinate

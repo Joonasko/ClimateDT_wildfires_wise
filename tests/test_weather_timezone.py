@@ -148,6 +148,42 @@ class WeatherTimezoneTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "split the run into separate dates"):
                 wise.ncdf_edits_multiarea(str(path))
 
+    def test_combined_run_uses_requested_local_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "climate.nc"
+            climate_dataset("2022-06-06").to_netcdf(path)
+            template = root / "template.fgmj"
+            template.write_text(json.dumps(fwi_tests.FWIInitializationTests().template()))
+            original_open = open
+
+            def redirected_open(path, *args, **kwargs):
+                path = str(path)
+                if path.startswith("/testjobs/"):
+                    path = template
+                elif path.startswith("/wise_output/"):
+                    path = root / path.removeprefix("/wise_output/")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                return original_open(path, *args, **kwargs)
+
+            with patch("builtins.open", side_effect=redirected_open), \
+                    patch.object(pd.DataFrame, "to_csv"), \
+                    patch.object(wise.os.path, "exists", return_value=True), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                wise.ncdf_edits_multiarea(
+                    str(path), simulation_date="2022-06-06",
+                    scenario_start_hour=8, scenario_end_hour=20,
+                )
+            for area in range(1, 10):
+                project = json.loads((root / f"area{area}/job.fgmj").read_text())["project"]
+                scenario = project["scenarios"]["scenarioData"][0]
+                start = pd.Timestamp(scenario["startTime"]["time"])
+                end = pd.Timestamp(scenario["endTime"]["time"])
+                self.assertEqual((start.hour, end.hour), (8, 20))
+                self.assertEqual(start.date(), end.date())
+                self.assertEqual(start.date().isoformat(), "2022-06-06")
+                self.assertEqual(start.utcoffset(), timedelta(hours=3 if area <= 3 else 1))
+
     def test_nonconsecutive_weather_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "climate.nc"
